@@ -1,7 +1,6 @@
 import datetime
 import re
 import sys
-import warnings
 from contextlib import contextmanager
 from unittest import SkipTest, skipIf
 from xml.dom.minidom import parseString
@@ -56,20 +55,11 @@ class LegacyDatabaseTests(TestCase):
         event = Event.objects.get()
         self.assertEqual(event.dt, dt)
 
-    @skipUnlessDBFeature('supports_microsecond_precision')
     def test_naive_datetime_with_microsecond(self):
         dt = datetime.datetime(2011, 9, 1, 13, 20, 30, 405060)
         Event.objects.create(dt=dt)
         event = Event.objects.get()
         self.assertEqual(event.dt, dt)
-
-    @skipIfDBFeature('supports_microsecond_precision')
-    def test_naive_datetime_with_microsecond_unsupported(self):
-        dt = datetime.datetime(2011, 9, 1, 13, 20, 30, 405060)
-        Event.objects.create(dt=dt)
-        event = Event.objects.get()
-        # microseconds are lost during a round-trip in the database
-        self.assertEqual(event.dt, dt.replace(microsecond=0))
 
     @skipUnlessDBFeature('supports_timezones')
     def test_aware_datetime_in_local_timezone(self):
@@ -81,7 +71,6 @@ class LegacyDatabaseTests(TestCase):
         self.assertEqual(event.dt.replace(tzinfo=EAT), dt)
 
     @skipUnlessDBFeature('supports_timezones')
-    @skipUnlessDBFeature('supports_microsecond_precision')
     def test_aware_datetime_in_local_timezone_with_microsecond(self):
         dt = datetime.datetime(2011, 9, 1, 13, 20, 30, 405060, tzinfo=EAT)
         Event.objects.create(dt=dt)
@@ -89,18 +78,6 @@ class LegacyDatabaseTests(TestCase):
         self.assertIsNone(event.dt.tzinfo)
         # interpret the naive datetime in local time to get the correct value
         self.assertEqual(event.dt.replace(tzinfo=EAT), dt)
-
-    # This combination actually never happens.
-    @skipUnlessDBFeature('supports_timezones')
-    @skipIfDBFeature('supports_microsecond_precision')
-    def test_aware_datetime_in_local_timezone_with_microsecond_unsupported(self):
-        dt = datetime.datetime(2011, 9, 1, 13, 20, 30, 405060, tzinfo=EAT)
-        Event.objects.create(dt=dt)
-        event = Event.objects.get()
-        self.assertIsNone(event.dt.tzinfo)
-        # interpret the naive datetime in local time to get the correct value
-        # microseconds are lost during a round-trip in the database
-        self.assertEqual(event.dt.replace(tzinfo=EAT), dt.replace(microsecond=0))
 
     @skipUnlessDBFeature('supports_timezones')
     def test_aware_datetime_in_utc(self):
@@ -182,15 +159,18 @@ class LegacyDatabaseTests(TestCase):
         self.assertQuerysetEqual(
             Session.objects.annotate(dt=Min('events__dt')).order_by('dt'),
             [morning_min_dt, afternoon_min_dt],
-            transform=lambda d: d.dt)
+            transform=lambda d: d.dt,
+        )
         self.assertQuerysetEqual(
             Session.objects.annotate(dt=Min('events__dt')).filter(dt__lt=afternoon_min_dt),
             [morning_min_dt],
-            transform=lambda d: d.dt)
+            transform=lambda d: d.dt,
+        )
         self.assertQuerysetEqual(
             Session.objects.annotate(dt=Min('events__dt')).filter(dt__gte=afternoon_min_dt),
             [afternoon_min_dt],
-            transform=lambda d: d.dt)
+            transform=lambda d: d.dt,
+        )
 
     def test_query_datetimes(self):
         Event.objects.create(dt=datetime.datetime(2011, 1, 1, 1, 30, 0))
@@ -245,17 +225,13 @@ class LegacyDatabaseTests(TestCase):
 
 @override_settings(TIME_ZONE='Africa/Nairobi', USE_TZ=True)
 class NewDatabaseTests(TestCase):
+    naive_warning = 'DateTimeField Event.dt received a naive datetime'
 
     @requires_tz_support
     def test_naive_datetime(self):
         dt = datetime.datetime(2011, 9, 1, 13, 20, 30)
-        with warnings.catch_warnings(record=True) as recorded:
-            warnings.simplefilter('always')
+        with self.assertWarnsMessage(RuntimeWarning, self.naive_warning):
             Event.objects.create(dt=dt)
-            self.assertEqual(len(recorded), 1)
-            msg = str(recorded[0].message)
-            self.assertTrue(msg.startswith("DateTimeField Event.dt received "
-                                           "a naive datetime"))
         event = Event.objects.get()
         # naive datetimes are interpreted in local time
         self.assertEqual(event.dt, dt.replace(tzinfo=EAT))
@@ -263,46 +239,19 @@ class NewDatabaseTests(TestCase):
     @requires_tz_support
     def test_datetime_from_date(self):
         dt = datetime.date(2011, 9, 1)
-        with warnings.catch_warnings(record=True) as recorded:
-            warnings.simplefilter('always')
+        with self.assertWarnsMessage(RuntimeWarning, self.naive_warning):
             Event.objects.create(dt=dt)
-            self.assertEqual(len(recorded), 1)
-            msg = str(recorded[0].message)
-            self.assertTrue(msg.startswith("DateTimeField Event.dt received "
-                                           "a naive datetime"))
         event = Event.objects.get()
         self.assertEqual(event.dt, datetime.datetime(2011, 9, 1, tzinfo=EAT))
 
     @requires_tz_support
-    @skipUnlessDBFeature('supports_microsecond_precision')
     def test_naive_datetime_with_microsecond(self):
         dt = datetime.datetime(2011, 9, 1, 13, 20, 30, 405060)
-        with warnings.catch_warnings(record=True) as recorded:
-            warnings.simplefilter('always')
+        with self.assertWarnsMessage(RuntimeWarning, self.naive_warning):
             Event.objects.create(dt=dt)
-            self.assertEqual(len(recorded), 1)
-            msg = str(recorded[0].message)
-            self.assertTrue(msg.startswith("DateTimeField Event.dt received "
-                                           "a naive datetime"))
         event = Event.objects.get()
         # naive datetimes are interpreted in local time
         self.assertEqual(event.dt, dt.replace(tzinfo=EAT))
-
-    @requires_tz_support
-    @skipIfDBFeature('supports_microsecond_precision')
-    def test_naive_datetime_with_microsecond_unsupported(self):
-        dt = datetime.datetime(2011, 9, 1, 13, 20, 30, 405060)
-        with warnings.catch_warnings(record=True) as recorded:
-            warnings.simplefilter('always')
-            Event.objects.create(dt=dt)
-            self.assertEqual(len(recorded), 1)
-            msg = str(recorded[0].message)
-            self.assertTrue(msg.startswith("DateTimeField Event.dt received "
-                                           "a naive datetime"))
-        event = Event.objects.get()
-        # microseconds are lost during a round-trip in the database
-        # naive datetimes are interpreted in local time
-        self.assertEqual(event.dt, dt.replace(microsecond=0, tzinfo=EAT))
 
     def test_aware_datetime_in_local_timezone(self):
         dt = datetime.datetime(2011, 9, 1, 13, 20, 30, tzinfo=EAT)
@@ -310,20 +259,11 @@ class NewDatabaseTests(TestCase):
         event = Event.objects.get()
         self.assertEqual(event.dt, dt)
 
-    @skipUnlessDBFeature('supports_microsecond_precision')
     def test_aware_datetime_in_local_timezone_with_microsecond(self):
         dt = datetime.datetime(2011, 9, 1, 13, 20, 30, 405060, tzinfo=EAT)
         Event.objects.create(dt=dt)
         event = Event.objects.get()
         self.assertEqual(event.dt, dt)
-
-    @skipIfDBFeature('supports_microsecond_precision')
-    def test_aware_datetime_in_local_timezone_with_microsecond_unsupported(self):
-        dt = datetime.datetime(2011, 9, 1, 13, 20, 30, 405060, tzinfo=EAT)
-        Event.objects.create(dt=dt)
-        event = Event.objects.get()
-        # microseconds are lost during a round-trip in the database
-        self.assertEqual(event.dt, dt.replace(microsecond=0))
 
     def test_aware_datetime_in_utc(self):
         dt = datetime.datetime(2011, 9, 1, 10, 20, 30, tzinfo=UTC)
@@ -375,17 +315,13 @@ class NewDatabaseTests(TestCase):
         dt = datetime.datetime(2011, 9, 1, 12, 20, 30, tzinfo=EAT)
         Event.objects.create(dt=dt)
         dt = dt.replace(tzinfo=None)
-        with warnings.catch_warnings(record=True) as recorded:
-            warnings.simplefilter('always')
-            # naive datetimes are interpreted in local time
+        # naive datetimes are interpreted in local time
+        with self.assertWarnsMessage(RuntimeWarning, self.naive_warning):
             self.assertEqual(Event.objects.filter(dt__exact=dt).count(), 1)
+        with self.assertWarnsMessage(RuntimeWarning, self.naive_warning):
             self.assertEqual(Event.objects.filter(dt__lte=dt).count(), 1)
+        with self.assertWarnsMessage(RuntimeWarning, self.naive_warning):
             self.assertEqual(Event.objects.filter(dt__gt=dt).count(), 0)
-            self.assertEqual(len(recorded), 3)
-            for warning in recorded:
-                msg = str(warning.message)
-                self.assertTrue(msg.startswith("DateTimeField Event.dt "
-                                               "received a naive datetime"))
 
     @skipUnlessDBFeature('has_zoneinfo_database')
     def test_query_datetime_lookups(self):
@@ -437,15 +373,18 @@ class NewDatabaseTests(TestCase):
         self.assertQuerysetEqual(
             Session.objects.annotate(dt=Min('events__dt')).order_by('dt'),
             [morning_min_dt, afternoon_min_dt],
-            transform=lambda d: d.dt)
+            transform=lambda d: d.dt,
+        )
         self.assertQuerysetEqual(
             Session.objects.annotate(dt=Min('events__dt')).filter(dt__lt=afternoon_min_dt),
             [morning_min_dt],
-            transform=lambda d: d.dt)
+            transform=lambda d: d.dt,
+        )
         self.assertQuerysetEqual(
             Session.objects.annotate(dt=Min('events__dt')).filter(dt__gte=afternoon_min_dt),
             [afternoon_min_dt],
-            transform=lambda d: d.dt)
+            transform=lambda d: d.dt,
+        )
 
     @skipUnlessDBFeature('has_zoneinfo_database')
     def test_query_datetimes(self):
